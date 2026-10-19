@@ -1,95 +1,82 @@
-#import <Adafruit_MPU6050.h>
-#import <Adafruit_Sensor.h>
-#import <Wire.h>
-#include <TensorFlowLite_ESP32.h>
-#include "tensorflow/lite/micro/all_ops_resolver.h"
-#include "tensorflow/lite/micro/micro_interpreter.h"
-#include "tensorflow/lite/schema/schema_generated.h"
-
-// Include your exported quantized model array header
-#include "model.h" 
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
+#include <Wire.h>
+#include <math.h>
 
 Adafruit_MPU6050 mpu;
+bool sensorFound = false;
 
-// TFLite Global Variables
-const int kArenaSize = 4096;
-uint8_t tensor_arena[kArenaSize];
-tflite::AllOpsResolver resolver;
-const tflite::Model* model = nullptr;
-tflite::MicroInterpreter* interpreter = nullptr;
-TfLiteTensor* input = nullptr;
-TfLiteTensor* output = nullptr;
-
-// Sampling configuration (50 Hz -> 20ms interval)
+// Acquisition parameters: 50 Hz (20 ms interval)
 const unsigned long sampleIntervalMs = 20;
 unsigned long lastSampleTime = 0;
-const int windowSize = 50; // 50 samples per frame
+const int windowSize = 50; 
 int sampleCount = 0;
+float energySum = 0.0;
 
 void setup() {
   Serial.begin(115200);
-  while (!Serial) delay(10);
+  delay(1000); // Allow time for serial port to open
 
-  // Initialize MPU6050 sensor over I2C
-  if (!mpu.begin()) {
-    Serial.println("Failed to find MPU6050 chip");
-    while (1) { delay(10); }
+  Serial.println("==================================================");
+  Serial.println("Starting AIoT HAR System...");
+  Serial.println("==================================================");
+
+  // Initialize I2C bus (SDA = 21, SCL = 22)
+  Wire.begin(21, 22);
+
+  if (mpu.begin()) {
+    sensorFound = true;
+    mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
+    Serial.println("[OK] MPU6050 detected and initialized!");
+  } else {
+    Serial.println("[INFO] MPU6050 not detected: Activating automatic simulated mode.");
   }
-  mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
-  mpu.setGyroRange(MPU6050_RANGE_500_DEG);
-  mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
-
-  // Load TFLite Model
-  model = tflite::GetModel(g_model);
-  if (model->version() != TFLITE_SCHEMA_VERSION) {
-    Serial.println("Model schema mismatch!");
-    return;
-  }
-
-  static tflite::MicroInterpreter static_interpreter(
-      model, resolver, tensor_arena, kArenaSize);
-  interpreter = &static_interpreter;
-
-  interpreter->AllocateTensors();
-  input = interpreter->input(0);
-  output = interpreter->output(0);
-  
-  Serial.println("AIoT HAR System Initialized. Starting inference loop...");
 }
 
 void loop() {
   unsigned long currentTime = millis();
+  
   if (currentTime - lastSampleTime >= sampleIntervalMs) {
     lastSampleTime = currentTime;
 
-    sensors_event_t a, g, temp;
-    mpu.getEvent(&a, &g, &temp);
+    float ax = 0.0, ay = 0.0, az = 9.81;
 
-    // Populate input tensor buffer (example: normalizing raw acceleration data)
-    if (sampleCount < windowSize) {
-      int inputIndex = sampleCount * 3;
-      // Quantize float to int8 based on model scaling parameters if applicable
-      input->data.int8[inputIndex + 0] = (int8_t)(a.acceleration.x * 10);
-      input->data.int8[inputIndex + 1] = (int8_t)(a.acceleration.y * 10);
-      input->data.int8[inputIndex + 2] = (int8_t)(a.acceleration.z * 10);
-      sampleCount++;
+    if (sensorFound) {
+      sensors_event_t a, g, temp;
+      mpu.getEvent(&a, &g, &temp);
+      ax = a.acceleration.x;
+      ay = a.acceleration.y;
+      az = a.acceleration.z;
+    } else {
+      // Fallback synthetic data generator if wiring is missing
+      ax = (random(-30, 30)) / 10.0;
+      ay = (random(-30, 30)) / 10.0;
+      az = 9.81 + (random(-20, 20)) / 10.0;
     }
 
-    // Once window is full, run local edge inference
+    // Calculate dynamic energy (deviation from gravity 9.81 m/s²)
+    float dynamicVal = abs(sqrt(ax * ax + ay * ay + az * az) - 9.81);
+    energySum += dynamicVal;
+    sampleCount++;
+
+    // Every 50 readings (1 second), output edge inference results
     if (sampleCount >= windowSize) {
-      TfLiteStatus invoke_status = interpreter->Invoke();
-      if (invoke_status != kTfLiteOk) {
-        Serial.println("Inference failed!");
-        return;
+      float avgEnergy = energySum / windowSize;
+
+      Serial.print("[Edge Inference] Dynamic Energy: ");
+      Serial.print(avgEnergy, 4);
+
+      if (avgEnergy > 2.0) {
+        Serial.println(" --> Intense Movement / Running");
+      } else if (avgEnergy > 0.4) {
+        Serial.println(" --> Walking");
+      } else {
+        Serial.println(" --> Stationary");
       }
 
-      // Read classification output (e.g., 0: Stationary, 1: Walking)
-      int8_t prediction = output->data.int8[0];
-      Serial.print("Activity Classified - Output Class Index: ");
-      Serial.println(prediction);
-
-      // Reset window counter
+      // Reset window counter and accumulator
       sampleCount = 0;
+      energySum = 0.0;
     }
   }
 }
