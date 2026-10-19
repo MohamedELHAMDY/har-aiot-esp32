@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "author": "Mohamed EL HAMDY",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "chip-mpu6050", "id": "mpu1", "top": -40, "left": 150, "attrs": {} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serial", "rx", [] ],
+    [ "esp:RX", "$serial", "tx", [] ],
+    [ "esp:GND.1", "mpu1:GND", "black", [ "v0" ] ],
+    [ "esp:3V3", "mpu1:VCC", "red", [ "v0" ] ],
+    [ "esp:22", "mpu1:SCL", "green", [ "v0" ] ],
+    [ "esp:21", "mpu1:SDA", "blue", [ "v0" ] ]
+  ]
+}
